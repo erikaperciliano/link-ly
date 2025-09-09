@@ -1,8 +1,10 @@
 package main
 
 import (
-	"errors"
+	"link-ly/api"
 	"log/slog"
+	"net/http"
+	"time"
 )
 
 func main() {
@@ -15,5 +17,17 @@ func main() {
 }
 
 func run() error {
-	return errors.New("foo")
+	handler := api.NewHandler()
+
+	s := http.Server{
+		ReadTimeout: 10 * time.Second,
+		Addr:        ":8080",
+		Handler:     handler,
+	}
+
+	if err := s.ListenAndServe(); err != nil {
+		return err
+	}
+
+	return nil
 }

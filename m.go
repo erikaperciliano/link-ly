@@ -2,9 +2,12 @@ package main
 
 import (
 	"link-ly/api"
+	"link-ly/internal/store"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -17,8 +20,15 @@ func main() {
 }
 
 func run() error {
-	db := make(map[string]string)
-	handler := api.NewHandler(db)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       0,
+	})
+
+	store := store.NewStore(rdb)
+
+	handler := api.NewHandler(store)
 
 	s := http.Server{
 		ReadTimeout: 10 * time.Second,

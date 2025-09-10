@@ -2,24 +2,26 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"link-ly/internal/store"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"net/url"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/redis/go-redis/v9"
 )
 
-func NewHandler(db map[string]string) http.Handler {
+func NewHandler(store store.Store) http.Handler {
 	r := chi.NewMux()
 
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logger)
 
-	r.Post("/api/shorten", handlePost(db))
-	r.Get("/{code}", handleGet(db))
+	r.Post("/api/shorten", handlePostShortenedURL(store))
+	r.Get("/{code}", handleGetShortenedURL(store))
 
 	return r
 }
@@ -55,20 +57,7 @@ func sendJSON(w http.ResponseWriter, resp Response, status int) {
 	}
 }
 
-const characters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-func genCode() string {
-	const n = 8
-	byts := make([]byte, n)
-
-	for i := range n {
-		byts[i] = characters[rand.IntN(len(characters))]
-	}
-
-	return string(byts)
-}
-
-func handlePost(db map[string]string) http.HandlerFunc {
+func handlePostShortenedURL(store store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body PostBody
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -76,30 +65,42 @@ func handlePost(db map[string]string) http.HandlerFunc {
 			return
 		}
 
-		if _, err := url.ParseRequestURI(body.URL); err != nil {
+		if _, err := url.Parse(body.URL); err != nil {
 			sendJSON(w, Response{Error: "Invalid url passed"}, http.StatusBadRequest)
 			return
 		}
 
-		code := genCode()
-		db[code] = body.URL
+		code, err := store.SaveShortenedURL(r.Context(), body.URL)
+		if err != nil {
+			slog.Error("failed to create code", "error", err)
+			sendJSON(w, Response{Error: "Something went wrong"}, http.StatusInternalServerError)
+			return
+		}
 
 		sendJSON(w, Response{Data: code}, http.StatusCreated)
 	}
 }
 
-func handleGet(db map[string]string) http.HandlerFunc {
+type getShortenedURLResponse struct {
+	FullURL string `json:"full_url"`
+}
+
+func handleGetShortenedURL(store store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-
 		code := chi.URLParam(r, "code")
-		data, ok := db[code]
+		fullURL, err := store.GetFullURL(r.Context(), code)
 
-		if !ok {
-			http.Error(w, "url não encontrada", http.StatusNotFound)
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				sendJSON(w, Response{Error: "code not found"}, http.StatusNotFound)
+				return
+			}
+			slog.Error("failed to get code", "error", err)
+			sendJSON(w, Response{Error: "something went wrong"}, http.StatusInternalServerError)
 			return
 		}
 
-		http.Redirect(w, r, data, http.StatusPermanentRedirect)
+		sendJSON(w, Response{Data: getShortenedURLResponse{FullURL: fullURL}}, http.StatusOK)
 	}
 
 }
